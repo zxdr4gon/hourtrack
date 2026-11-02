@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Hours Tracker</title>
+  <meta name="theme-color" content="#4f46e5">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Hours">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <button id="backBtn" class="icon-btn" hidden aria-label="Back">‹</button>
+    <h1 id="title">Hours Tracker</h1>
+    <button id="menuBtn" class="icon-btn" aria-label="Menu">⋯</button>
+  </header>
+
+  <main id="view"></main>
+
+  <!-- Add / edit section -->
+  <dialog id="sectionDialog">
+    <form method="dialog" id="sectionForm">
+      <h2 id="sectionDialogTitle">New section</h2>
+      <label>Name
+        <input name="name" required maxlength="40" placeholder="e.g. Cricket" autocomplete="off">
+      </label>
+      <label>Emoji
+        <input name="emoji" maxlength="4" placeholder="🏏" autocomplete="off">
+      </label>
+      <div class="field-label">Colour</div>
+      <div class="swatches" id="swatches"></div>
+      <div class="dialog-actions">
+        <button type="button" class="btn danger" id="deleteSectionBtn" hidden>Delete</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button type="submit" class="btn primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Add / edit session -->
+  <dialog id="sessionDialog">
+    <form method="dialog" id="sessionForm">
+      <h2 id="sessionDialogTitle">Add session</h2>
+      <label>Date
+        <input type="date" name="date" required>
+      </label>
+      <div class="row">
+        <label>Start
+          <input type="time" name="start" required>
+        </label>
+        <label>End
+          <input type="time" name="end" required>
+        </label>
+      </div>
+      <p class="hint" id="sessionHint"></p>
+      <label>Note (optional)
+        <input name="note" maxlength="120" placeholder="e.g. nets practice" autocomplete="off">
+      </label>
+      <div class="dialog-actions">
+        <button type="button" class="btn danger" id="deleteSessionBtn" hidden>Delete</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button type="submit" class="btn primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Menu -->
+  <dialog id="menuDialog">
+    <div class="menu">
+      <h2>Menu</h2>
+      <button class="btn block" id="exportBtn">⬇ Export backup</button>
+      <button class="btn block" id="importBtn">⬆ Import backup</button>
+      <input type="file" id="importFile" accept="application/json,.json" hidden>
+      <p class="hint">Your data is stored only on this device. Export a backup now and then so you never lose it.</p>
+      <div class="dialog-actions">
+        <span class="spacer"></span>
+        <button type="button" class="btn" data-close>Close</button>
+      </div>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
