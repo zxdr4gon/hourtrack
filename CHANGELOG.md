@@ -5,6 +5,22 @@ what changed, which files were touched, and anything to watch out for.
 
 ---
 
+## v4.3.0 — 2026-11-02 (regal indigo icon)
+**Cache version:** `v4.3`
+
+Changed
+- App icon is now "regal indigo": a diagonal gradient from `#3730a3` (top-left) to `#1e1b4b` (bottom-right)
+  behind the same white stopwatch. Manifest `theme_color` is now `#1e1b4b`.
+- The icons are drawn by a small pure-Python script (no image libraries). Colours used: top `#3730a3`, bottom `#1e1b4b`.
+
+Notes
+- Phones cache home-screen icons. On iPhone, remove Stint from the home screen and add it again to see the new
+  icon. On Android it usually updates on its own within a day; reinstalling forces it.
+
+**Files:** `icons/icon-192.png`, `icons/icon-512.png`, `icons/apple-touch-icon.png`, `manifest.webmanifest`, `sw.js`, `CHANGELOG.md`
+
+---
+
 ## v4.2.0 — 2026-11-02 (Midnight Indigo theme)
 **Cache version:** `v4.2`
 

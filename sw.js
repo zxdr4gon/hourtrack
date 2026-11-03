@@ -1,6 +1,6 @@
 // Offline support: saves the app's files on the device so it opens without internet.
 // IMPORTANT: change CACHE_VERSION every time any app file changes, so phones get the update.
-const CACHE_VERSION = "v4.2";
+const CACHE_VERSION = "v4.3";
 const CACHE_NAME = `hourstracker-${CACHE_VERSION}`;
 const FILES = [
   "./",
