@@ -42,6 +42,7 @@ function load() {
 
 function save() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  mirrorForReminders();
 }
 
 // Per-device preferences, kept apart from the data (not included in backups)
@@ -53,6 +54,8 @@ function loadSettings() {
     reminderTime: "18:30",
     lastReminded: null,
     lastBackup: null,
+    lastReviewSeen: null,
+    push: null, // background reminders on this device: { publicKey, privateKey, time, days }
   };
   try {
     return { ...defaults, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") };
@@ -63,6 +66,7 @@ function loadSettings() {
 
 function saveSettings() {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  mirrorForReminders();
 }
 
 function uid() {
@@ -209,9 +213,9 @@ function sessionsWithLive(sectionId, now = Date.now()) {
 
 // Time inside [from, to). Sessions that cross the boundary only count the part inside
 // (paused time is spread evenly over the session).
-function totalBetween(sectionId, from, to, now = Date.now()) {
+function totalBetween(sectionId, from, to, now = Date.now(), includeRunning = true) {
   let total = 0;
-  for (const s of sessionsWithLive(sectionId, now)) {
+  for (const s of includeRunning ? sessionsWithLive(sectionId, now) : sessionsFor(sectionId)) {
     const span = s.end - s.start;
     const overlap = Math.min(s.end, to) - Math.max(s.start, from);
     if (overlap > 0 && span > 0) total += overlap * (sessionMs(s) / span);
@@ -227,6 +231,23 @@ function totals(sectionId) {
     month: totalBetween(sectionId, startOfMonth(now), Infinity, now),
     all: totalBetween(sectionId, -Infinity, Infinity, now),
   };
+}
+
+// Time per day in [from, to) as a Map of dayKey -> ms, in one pass over the sessions
+function dailyTotals(sectionIds, from, to, now = Date.now()) {
+  const out = new Map();
+  for (const id of sectionIds) {
+    for (const s of sessionsWithLive(id, now)) {
+      const span = s.end - s.start;
+      if (span <= 0 || s.end <= from || s.start >= to) continue;
+      const rate = sessionMs(s) / span;
+      for (let day = startOfDay(Math.max(s.start, from)); day < Math.min(s.end, to); day = addDays(day, 1)) {
+        const overlap = Math.min(s.end, addDays(day, 1), to) - Math.max(s.start, day, from);
+        if (overlap > 0) out.set(dayKey(day), (out.get(dayKey(day)) || 0) + overlap * rate);
+      }
+    }
+  }
+  return out;
 }
 
 function sumSections(sectionIds, from, to) {
@@ -260,18 +281,65 @@ function streaks(sectionId) {
   return { current, best };
 }
 
-// section.goal = { period: "day" | "week", minutes }
+/* ---------- Goals ----------
+   section.goal = { period: "day" | "week", minutes, days }
+   days (daily goals only) = which weekdays the goal is on, 0 = Sunday. Missing = every day. */
+
+const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
+const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0]; // Monday first, for display
+
+function weekdayName(day, style = "short") {
+  return new Date(2024, 0, 7 + day).toLocaleDateString([], { weekday: style }); // 7 Jan 2024 was a Sunday
+}
+
+function goalDays(goal) {
+  return goal?.days?.length ? goal.days : ALL_DAYS;
+}
+
+// "every day", "weekdays", "weekends" or "Mon, Wed, Fri"
+function describeDays(days) {
+  const key = [...days].sort().join("");
+  if (key === "0123456") return "every day";
+  if (key === "12345") return "on weekdays";
+  if (key === "06") return "on weekends";
+  return "on " + WEEK_ORDER.filter((d) => days.includes(d)).map((d) => weekdayName(d)).join(", ");
+}
+
+function goalSummary(goal) {
+  const amount = fmtDuration(goal.minutes * 60000);
+  return goal.period === "week" ? `${amount} per week` : `${amount} ${describeDays(goalDays(goal))}`;
+}
+
+// Daily goal target (ms) on the day containing ts, or 0 if the goal isn't on that day
+function dailyTarget(section, ts) {
+  const goal = section.goal;
+  if (goal?.period !== "day") return 0;
+  return goalDays(goal).includes(new Date(ts).getDay()) ? goal.minutes * 60000 : 0;
+}
+
+function nextGoalDay(section) {
+  for (let i = 1; i <= 7; i++) {
+    const ts = addDays(Date.now(), i);
+    if (dailyTarget(section, ts)) return i === 1 ? "tomorrow" : weekdayName(new Date(ts).getDay());
+  }
+  return "";
+}
+
 function goalProgress(section) {
-  if (!section.goal) return null;
+  const goal = section.goal;
+  if (!goal) return null;
   const t = totals(section.id);
-  const done = section.goal.period === "week" ? t.week : t.today;
-  const target = section.goal.minutes * 60000;
+  if (goal.period === "day" && !dailyTarget(section, Date.now())) {
+    return { rest: true, done: t.today, next: nextGoalDay(section) };
+  }
+  const done = goal.period === "week" ? t.week : t.today;
+  const target = goal.minutes * 60000;
   return {
     done,
     target,
     pct: Math.min(1, done / target),
     met: done >= target,
-    label: section.goal.period === "week" ? "this week" : "today",
+    label: goal.period === "week" ? "this week" : "today",
   };
 }
 
@@ -279,7 +347,7 @@ function unmetDailyGoals() {
   return state.sections
     .filter((s) => s.goal?.period === "day")
     .map((section) => ({ section, progress: goalProgress(section) }))
-    .filter((x) => !x.progress.met);
+    .filter((x) => !x.progress.rest && !x.progress.met);
 }
 
 /* =========================================================
@@ -496,6 +564,136 @@ function checkReminder() {
   toast(`🎯 Still to do today: ${list}`);
 }
 
+/* ---------- Background reminders (Web Push) ----------
+   A free scheduled job in the GitHub repo (.github/workflows/reminder.yml) sends a push every
+   evening at the reminder time. The service worker then checks the goals and shows the reminder.
+   The service worker can't read localStorage, so we keep a small copy of what it needs in IndexedDB. */
+
+const REPO_URL = "https://github.com/zxdr4gon/hourstracker";
+const pushSupported = notificationsSupported && "PushManager" in window;
+
+function kvOpen() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open("stint", 1);
+    req.onupgradeneeded = () => req.result.createObjectStore("kv");
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function kvGet(key) {
+  const db = await kvOpen();
+  return new Promise((resolve, reject) => {
+    const req = db.transaction("kv").objectStore("kv").get(key);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function kvSet(key, value) {
+  const db = await kvOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction("kv", "readwrite");
+    tx.objectStore("kv").put(value, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// What the service worker needs to work out "which daily goals aren't done yet"
+let mirrorTimer;
+function mirrorForReminders() {
+  clearTimeout(mirrorTimer);
+  mirrorTimer = setTimeout(() => {
+    const now = Date.now();
+    const sections = state.sections
+      .filter((s) => s.goal?.period === "day")
+      .map((s) => ({ id: s.id, name: s.name, emoji: s.emoji, minutes: s.goal.minutes, days: goalDays(s.goal) }));
+    const done = {};
+    for (const s of sections) done[s.id] = totalBetween(s.id, startOfDay(now), Infinity, now, false);
+    kvSet("snapshot", {
+      today: dayKey(now),
+      reminderOn: settings.reminderOn,
+      lastReminded: settings.lastReminded,
+      sections,
+      done, // today's saved sessions; running timers are added by the service worker
+      running: state.running,
+    }).catch(() => {});
+  }, 300);
+}
+
+// If the push reminder already went off today, don't remind again inside the app
+async function syncPushReminded() {
+  try {
+    const day = await kvGet("pushReminded");
+    if (day === dayKey(Date.now()) && settings.lastReminded !== day) {
+      settings.lastReminded = day;
+      saveSettings();
+    }
+  } catch {}
+}
+
+function b64url(buffer) {
+  return btoa(String.fromCharCode(...new Uint8Array(buffer))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function b64urlBytes(str) {
+  return Uint8Array.from(atob(str.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+}
+
+// Each device makes its own key pair (VAPID). The private half goes into the GitHub secret.
+async function makeVapidKeys() {
+  const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+  return {
+    publicKey: b64url(await crypto.subtle.exportKey("raw", pair.publicKey)),
+    privateKey: (await crypto.subtle.exportKey("jwk", pair.privateKey)).d,
+  };
+}
+
+// Weekdays (0 = Sunday) that have at least one daily goal; the job only sends on these
+function reminderDays() {
+  return ALL_DAYS.filter((d) => state.sections.some((s) => s.goal?.period === "day" && goalDays(s.goal).includes(d)));
+}
+
+function pushCodeOutdated() {
+  const p = settings.push;
+  return !!p && (p.time !== settings.reminderTime || p.days.join() !== reminderDays().join());
+}
+
+// Subscribes this device and returns the text to paste into the STINT_PUSH secret
+async function makePushCode() {
+  if (location.hostname === "localhost") throw new Error("This only works on the live site.");
+  if (!(await ensureNotificationPermission())) throw new Error("Notifications weren't allowed.");
+  const reg = await navigator.serviceWorker.ready;
+  const keys = settings.push || (await makeVapidKeys());
+  let sub = await reg.pushManager.getSubscription();
+  const subKey = sub?.options?.applicationServerKey;
+  if (sub && (!subKey || b64url(subKey) !== keys.publicKey)) {
+    await sub.unsubscribe();
+    sub = null;
+  }
+  sub ??= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64urlBytes(keys.publicKey) });
+  settings.push = { publicKey: keys.publicKey, privateKey: keys.privateKey, time: settings.reminderTime, days: reminderDays() };
+  saveSettings();
+  return JSON.stringify({
+    subscription: sub.toJSON(),
+    publicKey: keys.publicKey,
+    privateKey: keys.privateKey,
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    time: settings.push.time,
+    days: settings.push.days,
+  });
+}
+
+async function turnOffPush() {
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    await (await reg?.pushManager.getSubscription())?.unsubscribe();
+  } catch {}
+  settings.push = null;
+  saveSettings();
+}
+
 /* =========================================================
    Screen wake lock (focus mode keeps the screen on)
    ========================================================= */
@@ -532,7 +730,7 @@ function sectionLabel(section) {
   return `${section.emoji ? esc(section.emoji) + " " : ""}${esc(section.name)}`;
 }
 
-// Routes: #/s/<id>, #/focus/<id>, #/stats, #/stopwatch, or nothing for home
+// Routes: #/s/<id>, #/focus/<id>, #/stats, #/stopwatch, #/search, #/review(/<monday>), or nothing for home
 function currentRoute() {
   const [, page, id] = location.hash.match(/^#\/(\w+)(?:\/(.+))?$/) || [];
   return { page: page || "home", id };
@@ -556,6 +754,8 @@ function render() {
   else if (page === "focus" && section) renderFocus(section);
   else if (page === "stats") renderStats();
   else if (page === "stopwatch") renderStopwatch();
+  else if (page === "search") renderSearch();
+  else if (page === "review") renderReview(id);
   else renderHome();
 
   updateWakeLock(page === "focus" && !!section);
@@ -563,10 +763,12 @@ function render() {
 }
 
 function goalBar(progress) {
+  if (progress.rest) return "";
   return `<div class="goal-bar ${progress.met ? "met" : ""}"><div style="width:${Math.round(progress.pct * 100)}%"></div></div>`;
 }
 
 function goalText(progress) {
+  if (progress.rest) return `😴 No goal today${progress.next ? ` · next ${progress.next}` : ""}`;
   return progress.met
     ? `🎯 Goal done ${progress.label} ✓`
     : `🎯 ${fmtDuration(progress.done)} of ${fmtDuration(progress.target)} ${progress.label}`;
@@ -609,14 +811,24 @@ function renderHome() {
 
   const nav = `
     <div class="nav-row">
-      <a class="btn" href="#/stats">📊 Stats</a>
-      <a class="btn" href="#/stopwatch">⏱ Stopwatch${state.stopwatch ? ' <span class="dot"></span>' : ""}</a>
+      <a class="btn nav-btn" href="#/stats"><span>📊</span>Stats</a>
+      <a class="btn nav-btn" href="#/review"><span>🗓</span>Review</a>
+      <a class="btn nav-btn" href="#/search"><span>🔎</span>Search</a>
+      <a class="btn nav-btn" href="#/stopwatch"><span>⏱</span>Stopwatch${state.stopwatch ? ' <i class="dot"></i>' : ""}</a>
     </div>`;
 
   let banner = "";
+  if (reviewDue()) {
+    banner += `
+      <div class="card banner">
+        <span>🗓 Your review of last week is ready.</span>
+        <a class="btn small primary" href="#/review">See it</a>
+        <button class="btn small" data-action="dismiss-review" aria-label="Dismiss">✕</button>
+      </div>`;
+  }
   if (backupDue()) {
     const days = settings.lastBackup ? Math.floor((Date.now() - settings.lastBackup) / DAY_MS) : null;
-    banner = `
+    banner += `
       <div class="card banner">
         <span>💾 ${days ? `Last backup was ${days} days ago.` : "You haven't backed up yet."}</span>
         <button class="btn small primary" data-action="backup">Back up</button>
@@ -673,6 +885,52 @@ function weeklyChart(sectionIds, weeks = 8) {
           <div class="col-label">${b.label}</div>
         </div>`).join("")}
     </div>`;
+}
+
+// GitHub-style calendar: one column per week (Mon at the top), darker = more time
+function heatmap(sectionIds, weeks = 26) {
+  const today = startOfDay(Date.now());
+  const first = addDays(startOfWeek(today), -7 * (weeks - 1));
+  const perDay = dailyTotals(sectionIds, first, addDays(today, 1));
+  const max = Math.max(...perDay.values(), 1);
+  const month = (w) => new Date(addDays(first, 7 * w)).getMonth();
+
+  const dayLabels = ["", "M", "", "W", "", "F", "", ""];
+  let cells = dayLabels.map((l) => `<span class="hm-label">${l}</span>`).join("");
+  for (let w = 0; w < weeks; w++) {
+    // Month name above the first week of each month (the first column only if there's room)
+    const showMonth = w === 0 ? month(2) === month(0) : month(w) !== month(w - 1);
+    const monthName = new Date(addDays(first, 7 * w)).toLocaleDateString([], { month: "short" });
+    cells += `<span class="hm-month">${showMonth ? monthName : ""}</span>`;
+    for (let d = 0; d < 7; d++) {
+      const ts = addDays(first, 7 * w + d);
+      if (ts > today) {
+        cells += `<span></span>`;
+        continue;
+      }
+      const ms = perDay.get(dayKey(ts)) || 0;
+      const level = ms ? Math.max(1, Math.ceil((ms / max) * 4)) : 0;
+      cells += `<span class="hm-cell l${level}" data-hm="${ts}"></span>`;
+    }
+  }
+  const activeDays = [...perDay.values()].filter((ms) => ms > 0).length;
+  return `
+    <div class="heatmap" style="grid-template-columns: 12px repeat(${weeks}, minmax(0, 1fr))">${cells}</div>
+    <div class="hm-foot">
+      <span>${activeDays} active day${activeDays === 1 ? "" : "s"}</span>
+      <span class="hm-scale">Less ${[0, 1, 2, 3, 4].map((l) => `<span class="hm-cell l${l}"></span>`).join("")} More</span>
+    </div>`;
+}
+
+function showDayTotal(ts, sectionIds) {
+  const from = Number(ts);
+  const parts = state.sections
+    .filter((s) => sectionIds.includes(s.id))
+    .map((s) => ({ s, ms: totalBetween(s.id, from, addDays(from, 1)) }))
+    .filter((p) => p.ms > 0);
+  const total = parts.reduce((sum, p) => sum + p.ms, 0);
+  const detail = parts.length > 1 ? ` (${parts.map((p) => `${p.s.name} ${fmtDuration(p.ms)}`).join(", ")})` : "";
+  toast(`${fmtDayHeading(from)}: ${total ? fmtDuration(total) + detail : "nothing logged"}`);
 }
 
 function renderSection(section) {
@@ -743,6 +1001,7 @@ function renderSection(section) {
         <div class="card goal-card">
           <div class="goal-line">${goalText(progress)}</div>
           ${goalBar(progress)}
+          <div class="goal-sub">Goal: ${goalSummary(section.goal)}</div>
         </div>` : ""}
 
       <div class="stats">
@@ -756,6 +1015,9 @@ function renderSection(section) {
 
       <h3 class="sub-head">Last 8 weeks</h3>
       <div class="card chart-card">${weeklyChart([section.id])}</div>
+
+      <h3 class="sub-head">Last 6 months</h3>
+      <div class="card chart-card">${heatmap([section.id])}</div>
 
       <div class="toolbar">
         <button class="btn" data-action="add-session">+ Add session</button>
@@ -804,6 +1066,28 @@ function renderFocus(section) {
 
 /* ---------- Stats ---------- */
 
+// One bar per day (dayStarts = start-of-day timestamps), stacked by section colour
+function stackedDays(dayStarts) {
+  const days = dayStarts.map((from) => {
+    const parts = state.sections.map((s) => ({ s, ms: totalBetween(s.id, from, addDays(from, 1)) })).filter((p) => p.ms > 0);
+    return { from, parts, total: parts.reduce((sum, p) => sum + p.ms, 0) };
+  });
+  const maxDay = Math.max(...days.map((d) => d.total), 1);
+  const used = state.sections.filter((s) => days.some((d) => d.parts.some((p) => p.s === s)));
+  return `
+    <div class="chart">
+      ${days.map((d) => `
+        <div class="col">
+          <div class="col-value">${d.total ? fmtDuration(d.total) : ""}</div>
+          <div class="bar-track"><div class="stack" style="height:${(d.total / maxDay) * 100}%">
+            ${d.parts.map((p) => `<div style="flex:${p.ms};background:${p.s.color}"></div>`).join("")}
+          </div></div>
+          <div class="col-label">${new Date(d.from).toLocaleDateString([], { weekday: "narrow" })}</div>
+        </div>`).join("")}
+    </div>
+    ${used.length ? `<div class="legend">${used.map((s) => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join("")}</div>` : ""}`;
+}
+
 function changeBadge(now, before) {
   if (!before) return now ? `<span class="change up">new</span>` : `<span class="change">—</span>`;
   const pct = Math.round(((now - before) / before) * 100);
@@ -828,26 +1112,7 @@ function renderStats() {
   const lastWeekSoFar = sumSections(ids, lastWeekStart, sameTimeLastWeek);
   const lastWeekFull = sumSections(ids, lastWeekStart, weekStart);
 
-  // Last 7 days, stacked by section
-  const days = [];
-  for (let i = 6; i >= 0; i--) {
-    const from = addDays(startOfDay(now), -i);
-    const parts = state.sections.map((s) => ({ s, ms: totalBetween(s.id, from, addDays(from, 1)) })).filter((p) => p.ms > 0);
-    days.push({ from, parts, total: parts.reduce((sum, p) => sum + p.ms, 0) });
-  }
-  const maxDay = Math.max(...days.map((d) => d.total), 1);
-  const chart = `
-    <div class="chart">
-      ${days.map((d) => `
-        <div class="col">
-          <div class="col-value">${d.total ? fmtDuration(d.total) : ""}</div>
-          <div class="bar-track"><div class="stack" style="height:${(d.total / maxDay) * 100}%">
-            ${d.parts.map((p) => `<div style="flex:${p.ms};background:${p.s.color}"></div>`).join("")}
-          </div></div>
-          <div class="col-label">${new Date(d.from).toLocaleDateString([], { weekday: "narrow" })}</div>
-        </div>`).join("")}
-    </div>
-    <div class="legend">${state.sections.map((s) => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join("")}</div>`;
+  const chart = stackedDays(Array.from({ length: 7 }, (_, i) => addDays(startOfDay(now), i - 6)));
 
   // This week vs last week, per section
   const rows = state.sections.map((s) => {
@@ -887,7 +1152,6 @@ function renderStats() {
   }
   const topDay = byWeekday.indexOf(Math.max(...byWeekday));
   const topTime = Object.entries(byTime).sort((a, b) => b[1] - a[1])[0][0];
-  const weekdayName = new Date(2024, 0, 7 + topDay).toLocaleDateString([], { weekday: "long" }); // 7 Jan 2024 was a Sunday
 
   view.innerHTML = `
     <div class="stats">
@@ -898,6 +1162,9 @@ function renderStats() {
 
     <h3 class="sub-head">Last 7 days</h3>
     <div class="card chart-card">${chart}</div>
+
+    <h3 class="sub-head">Last 6 months</h3>
+    <div class="card chart-card" style="--accent:var(--primary)">${heatmap(ids)}</div>
 
     <h3 class="sub-head">By section</h3>
     <div class="card list-card">
@@ -920,9 +1187,247 @@ function renderStats() {
         <div class="card stat"><div class="label">Average session</div><div class="value">${fmtDuration(totalAll / all.length)}</div></div>
         <div class="card stat"><div class="label">Longest session</div><div class="value">${fmtDuration(sessionMs(longest))}</div>
           <div class="label">${sectionLabel(getSection(longest.sectionId))}</div></div>
-        <div class="card stat"><div class="label">Most active day</div><div class="value">${weekdayName}</div></div>
+        <div class="card stat"><div class="label">Most active day</div><div class="value">${weekdayName(topDay, "long")}</div></div>
         <div class="card stat"><div class="label">Favourite time</div><div class="value">${topTime}</div></div>
       </div>` : `<div class="empty">No sessions yet.</div>`}`;
+}
+
+/* ---------- Weekly review ---------- */
+
+function fmtWeekRange(monday) {
+  return `${fmtShortDate(monday)} – ${fmtShortDate(addDays(monday, 6))}`;
+}
+
+// Total time per week, keyed by Monday's dayKey (sessions count in the week they started)
+function weekTotals() {
+  const out = new Map();
+  for (const x of state.sessions) {
+    if (!getSection(x.sectionId)) continue;
+    const key = dayKey(startOfWeek(x.start));
+    out.set(key, (out.get(key) || 0) + sessionMs(x));
+  }
+  return out;
+}
+
+// Show the home banner if last week had any time and its review hasn't been opened yet
+function reviewDue() {
+  const lastWeek = addDays(startOfWeek(Date.now()), -7);
+  if (settings.lastReviewSeen === dayKey(lastWeek)) return false;
+  return sumSections(state.sections.map((s) => s.id), lastWeek, addDays(lastWeek, 7)) > 0;
+}
+
+function renderReview(id) {
+  const now = Date.now();
+  const thisWeek = startOfWeek(now);
+  // Default to last week (the most recent finished one)
+  let monday = id ? startOfWeek(dateInputToTs(id)) : addDays(thisWeek, -7);
+  if (!(monday <= thisWeek)) monday = thisWeek;
+  const nextMonday = addDays(monday, 7);
+  const isCurrent = monday === thisWeek;
+  setHeader("Weekly review", true);
+
+  if (monday === addDays(thisWeek, -7) && settings.lastReviewSeen !== dayKey(monday)) {
+    settings.lastReviewSeen = dayKey(monday);
+    saveSettings();
+  }
+
+  const ids = state.sections.map((s) => s.id);
+  const total = sumSections(ids, monday, nextMonday);
+  const before = sumSections(ids, addDays(monday, -7), monday);
+  const perDay = dailyTotals(ids, monday, nextMonday);
+  const activeDays = [...perDay.values()].filter((ms) => ms > 0).length;
+  const daysSoFar = isCurrent ? Math.round((startOfDay(now) - monday) / DAY_MS) + 1 : 7;
+
+  const nav = `
+    <div class="week-nav">
+      <a class="btn small" href="#/review/${dayKey(addDays(monday, -7))}" aria-label="Previous week">‹</a>
+      <div class="week-title">${isCurrent ? "This week" : fmtWeekRange(monday)}${isCurrent ? `<div class="hint">${fmtWeekRange(monday)} · so far</div>` : ""}</div>
+      ${isCurrent ? `<span class="btn small invisible">›</span>` : `<a class="btn small" href="#/review/${dayKey(nextMonday)}" aria-label="Next week">›</a>`}
+    </div>`;
+
+  if (!total) {
+    view.innerHTML = nav + `<div class="empty">Nothing logged ${isCurrent ? "yet this week" : "this week"}.</div>`;
+    return;
+  }
+
+  // Highlights
+  const weekSessions = state.sessions.filter((x) => x.start >= monday && x.start < nextMonday && getSection(x.sectionId));
+  const longest = weekSessions.reduce((best, x) => (!best || sessionMs(x) > sessionMs(best) ? x : best), null);
+  const [bestDayKey, bestDayMs] = [...perDay.entries()].sort((a, b) => b[1] - a[1])[0];
+  const allWeeks = weekTotals();
+  const isRecord = allWeeks.size > 1 && (allWeeks.get(dayKey(monday)) || 0) >= Math.max(...allWeeks.values());
+
+  // Goals
+  const goalRows = state.sections.filter((s) => s.goal).map((s) => {
+    if (s.goal.period === "week") {
+      const done = totalBetween(s.id, monday, nextMonday);
+      const target = s.goal.minutes * 60000;
+      const met = done >= target;
+      return `
+        <div class="stat-row">
+          <span class="stat-name">${sectionLabel(s)}<div class="hint">${goalSummary(s.goal)}</div></span>
+          <span class="stat-num ${met ? "good" : ""}">${met ? "✓ " : ""}${Math.round((done / target) * 100)}%</span>
+        </div>`;
+    }
+    // Daily goal: on how many of its days was it met?
+    let planned = 0;
+    let met = 0;
+    for (let d = 0; d < daysSoFar; d++) {
+      const day = addDays(monday, d);
+      const target = dailyTarget(s, day);
+      if (!target) continue;
+      planned++;
+      if (totalBetween(s.id, day, addDays(day, 1)) >= target) met++;
+    }
+    if (!planned) return "";
+    return `
+      <div class="stat-row">
+        <span class="stat-name">${sectionLabel(s)}<div class="hint">${goalSummary(s.goal)}</div></span>
+        <span class="stat-num ${met === planned ? "good" : ""}">${met}/${planned} days</span>
+      </div>`;
+  }).join("");
+
+  const sectionRows = state.sections
+    .map((s) => ({ s, a: totalBetween(s.id, monday, nextMonday), b: totalBetween(s.id, addDays(monday, -7), monday) }))
+    .filter((r) => r.a || r.b)
+    .sort((x, y) => y.a - x.a)
+    .map(({ s, a, b }) => `
+      <div class="stat-row">
+        <span class="stat-name">${sectionLabel(s)}</span>
+        <span class="stat-num">${fmtDuration(a)}</span>
+        <span class="stat-num">${changeBadge(a, b)}</span>
+      </div>`).join("");
+
+  const notes = weekSessions.filter((x) => x.note).sort((a, b) => a.start - b.start).map((x) => `
+    <div class="session" data-edit-session="${x.id}">
+      <div class="times">${esc(x.note)}<div class="note">${sectionLabel(getSection(x.sectionId))} · ${fmtDayHeading(x.start)}</div></div>
+      <div class="dur">${fmtDuration(sessionMs(x))}</div>
+    </div>`).join("");
+
+  view.innerHTML = nav + `
+    ${isRecord ? `<div class="card banner"><span>🏆 Your biggest week so far!</span></div>` : ""}
+    <div class="stats">
+      <div class="card stat"><div class="label">Total</div><div class="value">${fmtDuration(total)}</div>
+        <div class="label">${changeBadge(total, before)} vs the week before</div></div>
+      <div class="card stat"><div class="label">Active days</div><div class="value">${activeDays} / ${daysSoFar}</div></div>
+      <div class="card stat"><div class="label">Best day</div><div class="value">${weekdayName(new Date(dateInputToTs(bestDayKey)).getDay(), "long")}</div>
+        <div class="label">${fmtDuration(bestDayMs)}</div></div>
+      ${longest ? `<div class="card stat"><div class="label">Longest session</div><div class="value">${fmtDuration(sessionMs(longest))}</div>
+        <div class="label">${sectionLabel(getSection(longest.sectionId))}</div></div>` : ""}
+    </div>
+
+    <h3 class="sub-head">Day by day</h3>
+    <div class="card chart-card">${stackedDays(Array.from({ length: 7 }, (_, i) => addDays(monday, i)))}</div>
+
+    ${goalRows ? `<h3 class="sub-head">Goals</h3><div class="card list-card">${goalRows}</div>` : ""}
+
+    <h3 class="sub-head">By section</h3>
+    <div class="card list-card">
+      <div class="stat-row head"><span class="stat-name"></span><span class="stat-num">Time</span><span class="stat-num">vs before</span></div>
+      ${sectionRows}
+    </div>
+
+    ${notes ? `<h3 class="sub-head">Your notes</h3><div class="card">${notes}</div>` : ""}`;
+}
+
+/* ---------- Session search ---------- */
+
+const SEARCH_LIMIT = 200;
+const emptyFilters = () => ({ q: "", scope: "all", from: "", to: "", sort: "newest", min: "" });
+let filters = emptyFilters();
+
+function dateInputToTs(value) {
+  const [y, m, d] = value.split("-").map(Number);
+  return new Date(y, m - 1, d).getTime();
+}
+
+function filteredSessions() {
+  const q = filters.q.trim().toLowerCase();
+  const kind = filters.scope.slice(0, 1); // "a"ll, "s"ection or "c"ategory
+  const value = filters.scope.slice(2);
+  const from = filters.from ? dateInputToTs(filters.from) : -Infinity;
+  const to = filters.to ? addDays(dateInputToTs(filters.to), 1) : Infinity; // "to" date is included
+  const min = Number(filters.min) * 60000 || 0;
+  const list = state.sessions.filter((x) => {
+    const section = getSection(x.sectionId);
+    if (!section) return false;
+    if (kind === "s" && x.sectionId !== value) return false;
+    if (kind === "c" && section.category !== value) return false;
+    if (x.start < from || x.start >= to) return false;
+    if (sessionMs(x) < min) return false;
+    return !q || (x.note || "").toLowerCase().includes(q) || section.name.toLowerCase().includes(q);
+  });
+  const sorters = {
+    newest: (a, b) => b.start - a.start,
+    oldest: (a, b) => a.start - b.start,
+    longest: (a, b) => sessionMs(b) - sessionMs(a),
+    shortest: (a, b) => sessionMs(a) - sessionMs(b),
+  };
+  return list.sort(sorters[filters.sort] || sorters.newest);
+}
+
+function renderSearch() {
+  setHeader("Sessions", true);
+  // Keep the form if it's already on screen, so typing isn't interrupted
+  if (!$("#filterForm")) {
+    const cats = categories();
+    view.innerHTML = `
+      <form class="card filter-card" id="filterForm" autocomplete="off">
+        <input type="search" name="q" placeholder="🔎 Search notes and sections" aria-label="Search">
+        <div class="row">
+          <select name="scope" aria-label="Section or category">
+            <option value="all">All sections</option>
+            ${state.sections.map((x) => `<option value="s:${x.id}">${sectionLabel(x)}</option>`).join("")}
+            ${cats.length ? `<optgroup label="Categories">${cats.map((c) => `<option value="c:${esc(c)}">${esc(c)}</option>`).join("")}</optgroup>` : ""}
+          </select>
+          <select name="sort" aria-label="Sort">
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+            <option value="longest">Longest first</option>
+            <option value="shortest">Shortest first</option>
+          </select>
+        </div>
+        <div class="row">
+          <label>From<input type="date" name="from"></label>
+          <label>To<input type="date" name="to"></label>
+        </div>
+        <div class="row filter-bottom">
+          <label>Longer than (min)<input type="number" name="min" min="0" inputmode="numeric" placeholder="0"></label>
+          <button type="button" class="btn" data-action="clear-filters">Clear</button>
+        </div>
+      </form>
+      <div id="results"></div>`;
+    const form = $("#filterForm");
+    for (const [key, value] of Object.entries(filters)) form[key].value = value;
+    form.addEventListener("input", () => {
+      for (const key of Object.keys(filters)) filters[key] = form[key].value;
+      drawResults();
+    });
+    form.addEventListener("submit", (e) => e.preventDefault());
+  }
+  drawResults();
+}
+
+function drawResults() {
+  const list = filteredSessions();
+  const total = list.reduce((sum, x) => sum + sessionMs(x), 0);
+  const rows = list.slice(0, SEARCH_LIMIT).map((x) => {
+    const section = getSection(x.sectionId);
+    const extra = [x.note && esc(x.note), x.paused >= 60000 && `paused ${fmtDuration(x.paused)}`].filter(Boolean).join(" · ");
+    return `
+      <div class="session" data-edit-session="${x.id}" style="--accent:${section.color}">
+        <div class="times">
+          <div class="result-title">${sectionLabel(section)}</div>
+          <div class="result-when">${fmtDayHeading(x.start)} · ${fmtTime(x.start)} – ${fmtTime(x.end)}</div>
+          ${extra ? `<div class="note">${extra}</div>` : ""}
+        </div>
+        <div class="dur">${fmtDuration(sessionMs(x))}</div>
+      </div>`;
+  }).join("");
+  $("#results").innerHTML = `
+    <div class="day-head"><span>${list.length} session${list.length === 1 ? "" : "s"}</span><span>${fmtDuration(total)}</span></div>
+    ${list.length ? `<div class="card results-card">${rows}</div>` : `<div class="empty">No sessions match.</div>`}
+    ${list.length > SEARCH_LIMIT ? `<p class="hint center">Showing the first ${SEARCH_LIMIT}. Narrow the filters to see more.</p>` : ""}`;
 }
 
 /* ---------- Stopwatch (not tied to a section) ---------- */
@@ -1027,6 +1532,7 @@ setInterval(() => {
 // When you come back to the app, refresh everything (also picks up a new day)
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
+    syncPushReminded();
     render();
     syncNotifications();
   }
@@ -1046,6 +1552,12 @@ view.addEventListener("click", (e) => {
   const open = e.target.closest("[data-open]");
   if (open) return (location.hash = `#/s/${open.dataset.open}`);
 
+  const hmCell = e.target.closest("[data-hm]");
+  if (hmCell) {
+    const { page, id } = currentRoute();
+    return showDayTotal(hmCell.dataset.hm, page === "s" ? [id] : state.sections.map((s) => s.id));
+  }
+
   const editSession = e.target.closest("[data-edit-session]");
   if (editSession) return openSessionDialog(editSession.dataset.editSession);
 
@@ -1056,6 +1568,16 @@ view.addEventListener("click", (e) => {
   if (action === "add-session") openSessionDialog();
   if (action === "countdown") openCountdownDialog(currentRoute().id);
   if (action === "backup") exportBackup();
+  if (action === "clear-filters") {
+    filters = emptyFilters();
+    view.innerHTML = "";
+    renderSearch();
+  }
+  if (action === "dismiss-review") {
+    settings.lastReviewSeen = dayKey(addDays(startOfWeek(Date.now()), -7));
+    saveSettings();
+    render();
+  }
   if (action.startsWith("sw-")) stopwatchAction(action);
 });
 
@@ -1110,8 +1632,34 @@ $("#emojiPicks").addEventListener("click", (e) => {
   if (pick) sectionForm.emoji.value = pick.dataset.emoji;
 });
 
-sectionForm.goalPeriod.addEventListener("change", () => {
-  sectionForm.goalMinutes.disabled = sectionForm.goalPeriod.value === "none";
+// Which days a daily goal is on
+let chosenDays = ALL_DAYS;
+
+function drawGoalFields() {
+  const period = sectionForm.goalPeriod.value;
+  sectionForm.goalMinutes.disabled = period === "none";
+  $("#goalDaysRow").hidden = period !== "day";
+  $("#goalDays").innerHTML = WEEK_ORDER.map((d) =>
+    `<button type="button" class="${chosenDays.includes(d) ? "selected" : ""}" data-day="${d}">${weekdayName(d, "narrow")}</button>`
+  ).join("");
+  $("#goalDaysText").textContent = describeDays(chosenDays).replace(/^on /, "");
+}
+
+sectionForm.goalPeriod.addEventListener("change", drawGoalFields);
+
+$("#goalDays").addEventListener("click", (e) => {
+  const day = Number(e.target.closest("[data-day]")?.dataset.day ?? NaN);
+  if (Number.isNaN(day)) return;
+  const next = chosenDays.includes(day) ? chosenDays.filter((d) => d !== day) : [...chosenDays, day];
+  if (next.length) chosenDays = next; // at least one day
+  drawGoalFields();
+});
+
+$("#goalDayPresets").addEventListener("click", (e) => {
+  const preset = e.target.closest("[data-days]")?.dataset.days;
+  if (!preset) return;
+  chosenDays = preset.split(",").map(Number);
+  drawGoalFields();
 });
 
 function updateMoveButtons() {
@@ -1144,7 +1692,8 @@ function openSectionDialog(id = null) {
   sectionForm.category.value = section?.category || "";
   sectionForm.goalPeriod.value = section?.goal?.period || "none";
   sectionForm.goalMinutes.value = section?.goal?.minutes || 30;
-  sectionForm.goalMinutes.disabled = !section?.goal;
+  chosenDays = [...goalDays(section?.goal)];
+  drawGoalFields();
   $("#categoryList").innerHTML = categories().map((c) => `<option value="${esc(c)}"></option>`).join("");
   chosenColor = section ? section.color : COLORS[state.sections.length % COLORS.length];
   $("#sectionDialogTitle").textContent = section ? "Edit section" : "New section";
@@ -1164,7 +1713,9 @@ sectionForm.addEventListener("submit", () => {
     emoji: sectionForm.emoji.value.trim(),
     color: chosenColor,
     category: sectionForm.category.value.trim(),
-    goal: period !== "none" && minutes > 0 ? { period, minutes } : null,
+    goal: period !== "none" && minutes > 0
+      ? { period, minutes, ...(period === "day" && chosenDays.length < 7 ? { days: [...chosenDays].sort() } : {}) }
+      : null,
   };
   const existing = editingSectionId && getSection(editingSectionId);
   if (existing) Object.assign(existing, fields);
@@ -1341,6 +1892,7 @@ function drawMenu() {
   $("#reminderBtn").textContent = `🎯 Daily goal reminder: ${settings.reminderOn ? "On" : "Off"}`;
   $("#reminderTime").value = settings.reminderTime;
   $("#reminderTimeRow").hidden = !settings.reminderOn;
+  $("#pushOpenBtn").textContent = `📲 Reminders when Stint is closed: ${settings.push ? (pushCodeOutdated() ? "update needed" : "On") : "Set up"}`;
   $("#notifyBtn").disabled = !notificationsSupported;
 
   let hint = "Shows a notification while a timer is running, with a Stop button (Android).";
@@ -1400,6 +1952,71 @@ $("#reminderTime").addEventListener("change", (e) => {
   settings.reminderTime = e.target.value || "18:30";
   settings.lastReminded = null;
   saveSettings();
+  drawMenu();
+});
+
+/* ---------- Background reminders dialog ---------- */
+
+const pushDialog = $("#pushDialog");
+
+$("#pushOpenBtn").addEventListener("click", () => {
+  $("#pushCode").value = "";
+  $("#pushCodeRow").hidden = true;
+  drawPushDialog();
+  pushDialog.showModal();
+});
+
+function drawPushDialog() {
+  const p = settings.push;
+  $("#pushSecretLink").href = `${REPO_URL}/settings/secrets/actions/new`;
+  $("#pushActionsLink").href = `${REPO_URL}/actions/workflows/reminder.yml`;
+  $("#pushMakeBtn").disabled = !pushSupported;
+  $("#pushMakeBtn").textContent = p ? "Make a new setup code" : "Make setup code";
+  $("#pushOffBtn").hidden = !p;
+
+  let status = "Not set up on this device yet.";
+  if (!pushSupported) status = "Push isn't available here. On iPhone, add Stint to your home screen and open it from there (needs iOS 16.4 or newer).";
+  else if (p) status = `✓ Set up on this device: ${p.time}, ${p.days.length ? describeDays(p.days) : "no days"}.`;
+  $("#pushStatus").textContent = status;
+
+  let warn = "";
+  if (!settings.reminderOn) warn = "Turn on 🎯 Daily goal reminder in the menu first.";
+  else if (!reminderDays().length) warn = "Give at least one section a daily goal first (Edit section → Goal).";
+  else if (pushCodeOutdated()) warn = "You changed the reminder time or your goal days. Make a new code and replace the STINT_PUSH secret on GitHub.";
+  $("#pushWarn").textContent = warn;
+  $("#pushWarn").hidden = !warn;
+}
+
+$("#pushMakeBtn").addEventListener("click", async () => {
+  const btn = $("#pushMakeBtn");
+  btn.disabled = true;
+  try {
+    $("#pushCode").value = await makePushCode();
+    $("#pushCodeRow").hidden = false;
+  } catch (err) {
+    toast(err.message || "Couldn't set up push");
+  }
+  drawPushDialog();
+  drawMenu();
+});
+
+$("#pushCopyBtn").addEventListener("click", async () => {
+  const box = $("#pushCode");
+  try {
+    await navigator.clipboard.writeText(box.value);
+  } catch {
+    box.select();
+    document.execCommand("copy");
+  }
+  toast("Copied. Now paste it into the GitHub secret.");
+});
+
+$("#pushOffBtn").addEventListener("click", async () => {
+  await turnOffPush();
+  $("#pushCodeRow").hidden = true;
+  drawPushDialog();
+  drawMenu();
+  toast("Turned off. Also delete the STINT_PUSH secret on GitHub.");
 });
 
 /* ---------- Backup ---------- */
@@ -1489,6 +2106,8 @@ applyTheme();
 checkCountdowns();
 render();
 handleStopFromUrl();
+mirrorForReminders();
+syncPushReminded();
 
 // Ask the browser not to clear our data when space is low
 navigator.storage?.persist?.();

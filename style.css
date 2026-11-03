@@ -499,16 +499,17 @@ select, .goal-row input {
   background: var(--text);
   color: var(--bg);
   padding: 10px 18px;
-  border-radius: 999px;
+  border-radius: 18px;
   font-weight: 600;
   font-size: 0.9rem;
   z-index: 20;
+  width: max-content;
   max-width: calc(100vw - 32px);
   display: flex;
   align-items: center;
   gap: 14px;
-  white-space: nowrap;
 }
+.toast button { flex-shrink: 0; }
 .toast[hidden] { display: none; }
 .toast button {
   border: 0;
@@ -518,4 +519,91 @@ select, .goal-row input {
   text-decoration: underline;
   padding: 0;
   cursor: pointer;
+}
+
+/* ---------- v4: goal days ---------- */
+.goal-sub { font-size: 0.75rem; color: var(--muted); margin-top: 8px; }
+#goalDaysRow { margin: -4px 0 14px; }
+#goalDaysText { font-weight: 500; }
+.day-picks { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.day-picks button, .day-presets button {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 10px;
+  padding: 8px 0;
+  font-weight: 700;
+  cursor: pointer;
+}
+.day-picks button.selected { background: var(--primary); border-color: var(--primary); color: #fff; }
+.day-presets { display: flex; gap: 6px; margin-top: 6px; }
+.day-presets button { flex: 1; font-weight: 600; font-size: 0.8rem; color: var(--muted); }
+
+/* ---------- v4: calendar heatmap ---------- */
+.heatmap {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: 12px repeat(7, auto);
+  gap: 2px;
+}
+.hm-label, .hm-month { font-size: 0.6rem; color: var(--muted); line-height: 1; white-space: nowrap; }
+.hm-label { display: flex; align-items: center; }
+.hm-month { overflow: visible; }
+.hm-cell { display: block; aspect-ratio: 1; border-radius: 2px; background: color-mix(in srgb, var(--muted) 14%, transparent); cursor: pointer; }
+.hm-cell.l1 { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+.hm-cell.l2 { background: color-mix(in srgb, var(--accent) 55%, transparent); }
+.hm-cell.l3 { background: color-mix(in srgb, var(--accent) 78%, transparent); }
+.hm-cell.l4 { background: var(--accent); }
+.hm-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 0.75rem; color: var(--muted); }
+.hm-scale { display: inline-flex; align-items: center; gap: 2px; }
+.hm-scale .hm-cell { width: 10px; cursor: default; }
+
+/* ---------- v4: session search ---------- */
+.filter-card { padding: 12px; margin-bottom: 14px; }
+.filter-card input[type="search"] {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  font-size: 1rem;
+  margin-bottom: 10px;
+}
+.filter-card .row { margin-bottom: 10px; }
+.filter-card label { margin-bottom: 0; min-width: 0; }
+.filter-card label input { min-width: 0; max-width: 100%; }
+.filter-card select { padding: 8px 10px; }
+.filter-bottom { align-items: flex-end; margin-bottom: 0 !important; }
+.results-card .session { border-left: 4px solid var(--accent); }
+.result-title { font-weight: 600; }
+.result-when { color: var(--muted); font-size: 0.85rem; }
+.center { text-align: center; }
+
+/* ---------- v4: home nav, weekly review ---------- */
+.nav-row .nav-btn { flex-direction: column; gap: 2px; padding: 8px 4px; font-size: 0.75rem; position: relative; }
+.nav-btn span { font-size: 1.2rem; }
+.nav-btn .dot { position: absolute; top: 6px; right: 8px; }
+.week-nav { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.week-nav .btn { font-size: 1.2rem; padding: 4px 14px; }
+.week-title { flex: 1; text-align: center; font-weight: 700; }
+.week-title .hint { margin: 2px 0 0; font-weight: 500; }
+.invisible { visibility: hidden; }
+.stat-num.good { color: #16a34a; }
+.stat-name .hint { margin: 0; white-space: normal; }
+
+/* ---------- v4: background reminders dialog ---------- */
+.steps { padding-left: 20px; margin: 0 0 14px; font-size: 0.9rem; line-height: 1.45; }
+.steps li { margin-bottom: 6px; }
+.steps a { color: var(--primary); font-weight: 600; }
+code { font-size: 0.85em; background: var(--bg); padding: 1px 5px; border-radius: 5px; border: 1px solid var(--border); }
+#pushCode {
+  width: 100%;
+  font: 0.7rem/1.3 ui-monospace, monospace;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  resize: none;
+  margin-bottom: 8px;
+  word-break: break-all;
 }

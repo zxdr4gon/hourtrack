@@ -5,6 +5,42 @@ what changed, which files were touched, and anything to watch out for.
 
 ---
 
+## v4.0.0 — 2026-11-02 (reminders, review, search)
+**Cache version:** `v4`
+
+Added
+- **Reminders when Stint is closed:** a scheduled GitHub Actions workflow (`.github/workflows/reminder.yml`,
+  every 30 min) sends a Web Push at the reminder time. The service worker checks the daily goals from a
+  copy in IndexedDB and shows "🎯 not done yet" (buzzes once a day) or a quiet "✅ done". Set up from
+  ⋯ → 📲 Reminders when Stint is closed: the app makes a VAPID key pair per device and a setup code to
+  paste into the `STINT_PUSH` repo secret. "Run workflow" sends a test push. Does nothing without the secret.
+- **Goal days:** daily goals can be on chosen weekdays (Every day / Weekdays / Weekends presets or any mix).
+  Off days show "😴 No goal today · next Wed" and don't trigger reminders.
+- **Calendar heatmap:** last 26 weeks, on Stats (all sections) and each section page. Tap a day for its total.
+- **Weekly review** (`#/review`, ‹ › to change week): total vs the week before, active days, best day,
+  longest session, day-by-day chart, goal hits (daily: X/Y days, weekly: %), per-section change, notes,
+  🏆 on a record week. Home banner when last week's review hasn't been opened.
+- **Session search** (`#/search`): text search over notes and section names, filter by section or category,
+  date range, minimum length; sort newest / oldest / longest / shortest. Tap a result to edit it.
+- Home navigation is now four buttons: Stats, Review, Search, Stopwatch.
+
+Changed
+- Long toasts wrap instead of being cut off.
+- The Stats 7-day chart legend only lists sections that appear in it.
+- `save()` and `saveSettings()` also refresh the IndexedDB snapshot for the service worker.
+
+Notes / migrations
+- `goal` gains optional `days` (array of 0–6, 0 = Sunday). Missing = every day, so old goals are unchanged.
+- Settings gain `lastReviewSeen` and `push`.
+- New IndexedDB database `stint` (store `kv`).
+- Tested: scheduling (`remind.js`) and push encryption with Node; the service worker push handler with a
+  mocked IndexedDB. A real push to a phone wasn't possible to test here.
+
+**Files:** `index.html`, `style.css`, `app.js`, `sw.js`, `.github/workflows/reminder.yml` (new),
+`.github/scripts/remind.js` (new), `README.md`, `CHANGELOG.md`
+
+---
+
 ## v3.0.0 — 2026-11-02 (big feature update)
 **Cache version:** `v3`
 
