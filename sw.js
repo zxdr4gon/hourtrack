@@ -1,6 +1,6 @@
 // Offline support: saves the app's files on the device so it opens without internet.
 // IMPORTANT: change CACHE_VERSION every time any app file changes, so phones get the update.
-const CACHE_VERSION = "v4.1";
+const CACHE_VERSION = "v4.2";
 const CACHE_NAME = `hourstracker-${CACHE_VERSION}`;
 const FILES = [
   "./",
@@ -31,11 +31,24 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
-// Serve from the saved copy first, fall back to the network
+// Serve from the saved copy first, fall back to the network.
+// The Google font is saved the first time it loads, so it works offline afterwards.
+const FONT_HOSTS = ["fonts.googleapis.com", "fonts.gstatic.com"];
+
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
+  const isFont = FONT_HOSTS.includes(new URL(event.request.url).hostname);
   event.respondWith(
-    caches.match(event.request, { ignoreSearch: true }).then((cached) => cached || fetch(event.request))
+    caches.match(event.request, { ignoreSearch: !isFont }).then((cached) => {
+      if (cached) return cached;
+      return fetch(event.request).then((response) => {
+        if (isFont && (response.ok || response.type === "opaque")) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        }
+        return response;
+      });
+    })
   );
 });
 

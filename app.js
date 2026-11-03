@@ -7,7 +7,7 @@
 // Keep these keys as they are, even though the app is now called Stint: changing them would lose saved data
 const STORAGE_KEY = "hourstracker:v1";
 const SETTINGS_KEY = "hourstracker:settings";
-const COLORS = ["#4f46e5", "#0ea5e9", "#10b981", "#84cc16", "#f59e0b", "#f97316", "#ef4444", "#ec4899", "#a855f7", "#64748b"];
+const COLORS = ["#8b5cf6", "#0ea5e9", "#10b981", "#84cc16", "#f59e0b", "#f97316", "#ef4444", "#ec4899", "#a855f7", "#64748b"];
 const EMOJI_PICKS = ["🏏", "⚽", "🏀", "🎾", "🏃", "🚴", "🏋️", "🏊", "🧘", "📚", "💻", "🎸", "🎨", "🎮"];
 const COUNTDOWN_PRESETS = [5, 10, 15, 20, 30, 45, 60, 90];
 const MIN_SESSION_MS = 3000;          // taps shorter than this are treated as accidental
@@ -1065,17 +1065,6 @@ function fmtWeekRange(monday) {
   return `${fmtShortDate(monday)} – ${fmtShortDate(addDays(monday, 6))}`;
 }
 
-// Total time per week, keyed by Monday's dayKey (sessions count in the week they started)
-function weekTotals() {
-  const out = new Map();
-  for (const x of state.sessions) {
-    if (!getSection(x.sectionId)) continue;
-    const key = dayKey(startOfWeek(x.start));
-    out.set(key, (out.get(key) || 0) + sessionMs(x));
-  }
-  return out;
-}
-
 // Show the home banner if last week had any time and its review hasn't been opened yet
 function reviewDue() {
   const lastWeek = addDays(startOfWeek(Date.now()), -7);
@@ -1121,8 +1110,6 @@ function renderReview(id) {
   const weekSessions = state.sessions.filter((x) => x.start >= monday && x.start < nextMonday && getSection(x.sectionId));
   const longest = weekSessions.reduce((best, x) => (!best || sessionMs(x) > sessionMs(best) ? x : best), null);
   const [bestDayKey, bestDayMs] = [...perDay.entries()].sort((a, b) => b[1] - a[1])[0];
-  const allWeeks = weekTotals();
-  const isRecord = allWeeks.size > 1 && (allWeeks.get(dayKey(monday)) || 0) >= Math.max(...allWeeks.values());
 
   // Goals
   const goalRows = state.sections.filter((s) => s.goal).map((s) => {
@@ -1172,7 +1159,6 @@ function renderReview(id) {
     </div>`).join("");
 
   view.innerHTML = nav + `
-    ${isRecord ? `<div class="card banner"><span>🏆 Your biggest week so far!</span></div>` : ""}
     <div class="stats">
       <div class="card stat"><div class="label">Total</div><div class="value">${fmtDuration(total)}</div>
         <div class="label">${changeBadge(total, before)} vs the week before</div></div>

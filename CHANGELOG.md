@@ -5,6 +5,25 @@ what changed, which files were touched, and anything to watch out for.
 
 ---
 
+## v4.2.0 — 2026-11-02 (Midnight Indigo theme)
+**Cache version:** `v4.2`
+
+Changed
+- **Dark mode is now "Midnight Indigo":** deep navy-indigo background with a faint violet glow at the top,
+  indigo cards, lavender-grey secondary text, soft violet (`#c084fc`) buttons with dark text.
+- Light mode's accent is now violet (`#6d28d9`) to match.
+- **Font: Manrope** (Google Fonts). The service worker saves it the first time it loads, so it works offline.
+- The top bar is see-through with a blur.
+- First default section colour is violet instead of indigo.
+- Colours are tokens in `style.css` `:root` (new: `--on-primary`, `--good`, `--glow`, `--font`).
+
+Removed
+- The "🏆 Your biggest week so far!" banner on the weekly review (keeping it simple, no gamification overload).
+
+**Files:** `index.html`, `style.css`, `app.js`, `sw.js`, `manifest.webmanifest`, `CHANGELOG.md`, `README.md`
+
+---
+
 ## v4.1.0 — 2026-11-02 (push reminders removed)
 **Cache version:** `v4.1`
 

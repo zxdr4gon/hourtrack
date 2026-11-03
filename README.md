@@ -23,7 +23,7 @@ and duration. Each section tracks totals and streaks.
 - History grouped by day: edit, delete (with Undo) or add sessions by hand, with notes
 - "Forgot to stop?" check when a timer ran over 3 hours
 - Optional "timer running" notification with a Stop button (Android)
-- Light / Dark / Auto theme
+- Light / Dark ("Midnight Indigo") / Auto theme, Manrope font
 - Works offline and installs to your home screen
 - Export / import a JSON backup, with a reminder if you haven't backed up in 14 days
 
@@ -45,6 +45,7 @@ Use **⋯ → Export backup** now and then, and **Import backup** to restore it 
 - Plain HTML, CSS and JavaScript. No frameworks, no build step, no npm.
 - PWA hosted on GitHub Pages from the `main` branch root. Costs nothing.
 - Mobile-first; must also work on desktop.
+- Design: keep it simple, no gamification overload. Colours are tokens at the top of `style.css`.
 
 ### Files
 | File | What it does |

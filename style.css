@@ -4,36 +4,48 @@
   --text: #1c1c1e;
   --muted: #6b6b73;
   --border: #e3e3e8;
-  --primary: #4f46e5;
+  --primary: #6d28d9;
+  --on-primary: #ffffff;
   --danger: #dc2626;
+  --good: #16a34a;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --glow: none;
   --radius: 16px;
+  --font: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   color-scheme: light;
 }
 
-/* Dark: follows the phone's setting on "Auto", or forced from the menu */
+/* Dark ("Midnight Indigo"): follows the phone's setting on "Auto", or forced from the menu */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0f0f12;
-    --card: #1c1c21;
-    --text: #f2f2f5;
-    --muted: #9a9aa3;
-    --border: #2c2c33;
-    --primary: #818cf8;
-    --danger: #f87171;
-    --shadow: none;
+    --bg: #100f24;
+    --card: #1a1934;
+    --border: #2a2850;
+    --text: #ecebfa;
+    --muted: #9b97c4;
+    --primary: #c084fc;
+    --on-primary: #1a0f33;
+    --danger: #fb7185;
+    --good: #4ade80;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --glow: radial-gradient(ellipse 90% 45% at 10% -5%, rgba(168, 85, 247, 0.16), transparent 70%),
+            radial-gradient(ellipse 70% 40% at 100% 0%, rgba(99, 102, 241, 0.12), transparent 70%);
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #0f0f12;
-  --card: #1c1c21;
-  --text: #f2f2f5;
-  --muted: #9a9aa3;
-  --border: #2c2c33;
-  --primary: #818cf8;
-  --danger: #f87171;
-  --shadow: none;
+  --bg: #100f24;
+  --card: #1a1934;
+  --border: #2a2850;
+  --text: #ecebfa;
+  --muted: #9b97c4;
+  --primary: #c084fc;
+  --on-primary: #1a0f33;
+  --danger: #fb7185;
+  --good: #4ade80;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --glow: radial-gradient(ellipse 90% 45% at 10% -5%, rgba(168, 85, 247, 0.16), transparent 70%),
+          radial-gradient(ellipse 70% 40% at 100% 0%, rgba(99, 102, 241, 0.12), transparent 70%);
   color-scheme: dark;
 }
 
@@ -43,15 +55,19 @@ html, body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font);
   -webkit-tap-highlight-color: transparent;
 }
 
 body {
+  min-height: 100vh;
   padding-bottom: calc(24px + env(safe-area-inset-bottom));
+  background: var(--glow), var(--bg);
+  background-attachment: fixed;
 }
 
-button, input { font: inherit; color: inherit; }
+button, input, select, textarea { font: inherit; color: inherit; }
+h1, h2, h3 { letter-spacing: -0.02em; }
 
 /* ---------- Top bar ---------- */
 .topbar {
@@ -62,7 +78,9 @@ button, input { font: inherit; color: inherit; }
   align-items: center;
   gap: 8px;
   padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
-  background: var(--bg);
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
 }
 .topbar h1 {
   flex: 1;
@@ -97,7 +115,7 @@ main {
   cursor: pointer;
   font-weight: 600;
 }
-.btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
 .btn.danger { color: var(--danger); }
 .btn.block { display: block; width: 100%; margin-bottom: 8px; text-align: left; }
 .btn:active { transform: scale(0.98); }
@@ -409,7 +427,7 @@ a.btn { text-decoration: none; color: inherit; display: inline-flex; align-items
 .stat-num { width: 78px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
 .muted { color: var(--muted); }
 .change { font-weight: 700; }
-.change.up { color: #16a34a; }
+.change.up { color: var(--good); }
 .change.down { color: var(--danger); }
 
 /* ---------- Focus mode & stopwatch ---------- */
@@ -534,7 +552,7 @@ select, .goal-row input {
   font-weight: 700;
   cursor: pointer;
 }
-.day-picks button.selected { background: var(--primary); border-color: var(--primary); color: #fff; }
+.day-picks button.selected { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
 .day-presets { display: flex; gap: 6px; margin-top: 6px; }
 .day-presets button { flex: 1; font-weight: 600; font-size: 0.8rem; color: var(--muted); }
 
@@ -587,5 +605,5 @@ select, .goal-row input {
 .week-title { flex: 1; text-align: center; font-weight: 700; }
 .week-title .hint { margin: 2px 0 0; font-weight: 500; }
 .invisible { visibility: hidden; }
-.stat-num.good { color: #16a34a; }
+.stat-num.good { color: var(--good); }
 .stat-name .hint { margin: 0; white-space: normal; }
