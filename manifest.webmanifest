@@ -1,6 +1,6 @@
 {
-  "name": "Hours Tracker",
-  "short_name": "Hours",
+  "name": "Stint",
+  "short_name": "Stint",
   "description": "Log time spent on your activities.",
   "start_url": "./",
   "scope": "./",

@@ -3,20 +3,27 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Hours Tracker</title>
-  <meta name="theme-color" content="#4f46e5">
+  <title>Stint</title>
+  <meta name="theme-color" content="#f5f5f7">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="apple-mobile-web-app-title" content="Hours">
+  <meta name="apple-mobile-web-app-title" content="Stint">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon-192.png">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
   <link rel="stylesheet" href="style.css">
+  <script>
+    // Apply the saved theme before the page draws, so it doesn't flash
+    try {
+      const theme = JSON.parse(localStorage.getItem("hourstracker:settings") || "{}").theme;
+      if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+    } catch {}
+  </script>
 </head>
 <body>
   <header class="topbar">
     <button id="backBtn" class="icon-btn" hidden aria-label="Back">‹</button>
-    <h1 id="title">Hours Tracker</h1>
+    <h1 id="title">Stint</h1>
     <button id="menuBtn" class="icon-btn" aria-label="Menu">⋯</button>
   </header>
 
@@ -32,8 +39,14 @@
       <label>Emoji
         <input name="emoji" maxlength="4" placeholder="🏏" autocomplete="off">
       </label>
+      <div class="emoji-picks" id="emojiPicks"></div>
       <div class="field-label">Colour</div>
       <div class="swatches" id="swatches"></div>
+      <div class="position" id="positionRow">
+        <span class="field-label">Position on home screen</span>
+        <button type="button" class="btn small" id="moveUpBtn" aria-label="Move up">↑</button>
+        <button type="button" class="btn small" id="moveDownBtn" aria-label="Move down">↓</button>
+      </div>
       <div class="dialog-actions">
         <button type="button" class="btn danger" id="deleteSectionBtn" hidden>Delete</button>
         <span class="spacer"></span>
@@ -75,6 +88,17 @@
   <dialog id="menuDialog">
     <div class="menu">
       <h2>Menu</h2>
+
+      <div class="field-label">Theme</div>
+      <div class="segmented" id="themePicker">
+        <button type="button" data-theme-choice="system">Auto</button>
+        <button type="button" data-theme-choice="light">Light</button>
+        <button type="button" data-theme-choice="dark">Dark</button>
+      </div>
+
+      <button class="btn block" id="notifyBtn"></button>
+      <p class="hint" id="notifyHint">Shows a notification while a timer is running, with a Stop button (Android).</p>
+
       <button class="btn block" id="exportBtn">⬇ Export backup</button>
       <button class="btn block" id="importBtn">⬆ Import backup</button>
       <input type="file" id="importFile" accept="application/json,.json" hidden>
@@ -86,7 +110,10 @@
     </div>
   </dialog>
 
-  <div id="toast" class="toast" hidden></div>
+  <div id="toast" class="toast" hidden>
+    <span id="toastMsg"></span>
+    <button type="button" id="toastUndo" hidden>Undo</button>
+  </div>
 
   <script src="app.js"></script>
 </body>

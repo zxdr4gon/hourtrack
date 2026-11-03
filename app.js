@@ -4,11 +4,15 @@
    Data
    ========================================================= */
 
+// Keep these keys as they are, even though the app is now called Stint: changing them would lose saved data
 const STORAGE_KEY = "hourstracker:v1";
+const SETTINGS_KEY = "hourstracker:settings";
 const COLORS = ["#4f46e5", "#0ea5e9", "#10b981", "#84cc16", "#f59e0b", "#f97316", "#ef4444", "#ec4899", "#a855f7", "#64748b"];
+const EMOJI_PICKS = ["🏏", "⚽", "🏀", "🎾", "🏃", "🚴", "🏋️", "🏊", "🧘", "📚", "💻", "🎸", "🎨", "🎮"];
 const MIN_SESSION_MS = 3000; // taps shorter than this are treated as accidental
 
 let state = load();
+let settings = loadSettings();
 
 function emptyState() {
   return { sections: [], sessions: [], running: {} };
@@ -26,6 +30,19 @@ function load() {
 
 function save() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+// Per-device preferences, kept apart from the data (not included in backups)
+function loadSettings() {
+  try {
+    return { theme: "system", notify: false, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") };
+  } catch {
+    return { theme: "system", notify: false };
+  }
+}
+
+function saveSettings() {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
 }
 
 function uid() {
@@ -182,6 +199,7 @@ function startTimer(sectionId) {
   state.running[sectionId] = Date.now();
   save();
   render();
+  syncNotifications();
 }
 
 function stopTimer(sectionId) {
@@ -192,16 +210,69 @@ function stopTimer(sectionId) {
   if (end - start < MIN_SESSION_MS) {
     toast("Too short — not saved");
   } else {
-    state.sessions.push({ id: uid(), sectionId, start, end, note: "" });
-    toast(`Logged ${fmtDuration(end - start)}`);
+    const session = { id: uid(), sectionId, start, end, note: "" };
+    state.sessions.push(session);
+    // Undo puts the timer back as if Stop was never pressed
+    toast(`Logged ${fmtDuration(end - start)}`, () => {
+      state.sessions = state.sessions.filter((s) => s.id !== session.id);
+      state.running[sectionId] = start;
+      save();
+      render();
+      syncNotifications();
+    });
   }
   save();
   render();
+  syncNotifications();
 }
 
 function toggleTimer(sectionId) {
+  navigator.vibrate?.(30);
   if (state.running[sectionId]) stopTimer(sectionId);
   else startTimer(sectionId);
+}
+
+/* =========================================================
+   Notifications: "Cricket is running" while a timer is going
+   ========================================================= */
+
+// Shows one notification per running timer and removes the rest.
+// Needs the offline service worker, so it only works on the live site, not on localhost.
+async function syncNotifications() {
+  if (!("serviceWorker" in navigator) || !("Notification" in window)) return;
+  const reg = await navigator.serviceWorker.getRegistration();
+  if (!reg) return;
+  const wanted = settings.notify && Notification.permission === "granted" ? state.running : {};
+
+  for (const n of await reg.getNotifications()) {
+    if (!(n.data?.sectionId in wanted)) n.close();
+  }
+  for (const [sectionId, start] of Object.entries(wanted)) {
+    const section = getSection(sectionId);
+    if (!section) continue;
+    await reg.showNotification(`${section.emoji ? section.emoji + " " : ""}${section.name} — running`, {
+      body: `Started at ${fmtTime(start)}. Tap to open.`,
+      tag: `running-${sectionId}`,
+      data: { sectionId },
+      timestamp: start,
+      requireInteraction: true,
+      silent: true,
+      icon: "icons/icon-192.png",
+      actions: [{ action: "stop", title: "⏹ Stop" }],
+    });
+  }
+}
+
+// The Stop button on a notification sends us a message (or opens the app with ?stop=id)
+navigator.serviceWorker?.addEventListener("message", (e) => {
+  if (e.data?.type === "stop") stopTimer(e.data.sectionId);
+});
+
+function handleStopFromUrl() {
+  const id = new URLSearchParams(location.search).get("stop");
+  if (!id) return;
+  history.replaceState(null, "", location.pathname + location.hash);
+  stopTimer(id);
 }
 
 /* =========================================================
@@ -233,9 +304,9 @@ function render() {
 }
 
 function renderHome() {
-  $("#title").textContent = "Hours Tracker";
+  $("#title").textContent = "Stint";
   $("#backBtn").hidden = true;
-  document.title = "Hours Tracker";
+  document.title = "Stint";
 
   if (!state.sections.length) {
     view.innerHTML = `
@@ -268,13 +339,16 @@ function renderHome() {
       </div>`;
   });
 
-  view.innerHTML = cards.join("") + `<button class="add-section" data-action="add-section">+ Add section</button>`;
+  const todayAll = state.sections.reduce((sum, s) => sum + totals(s.id).today, 0);
+  const summary = `<div class="home-summary">Today: ${fmtDuration(todayAll)} across all sections</div>`;
+
+  view.innerHTML = summary + cards.join("") + `<button class="add-section" data-action="add-section">+ Add section</button>`;
 }
 
 function renderSection(section) {
   $("#title").textContent = `${section.emoji ? section.emoji + " " : ""}${section.name}`;
   $("#backBtn").hidden = false;
-  document.title = `${section.name} · Hours Tracker`;
+  document.title = `${section.name} · Stint`;
 
   const running = state.running[section.id];
   const t = totals(section.id);
@@ -357,7 +431,10 @@ setInterval(() => {
 
 // When you come back to the app, refresh everything (also picks up a new day)
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") render();
+  if (document.visibilityState === "visible") {
+    render();
+    syncNotifications();
+  }
 });
 
 /* =========================================================
@@ -414,6 +491,33 @@ $("#swatches").addEventListener("click", (e) => {
   drawSwatches();
 });
 
+$("#emojiPicks").innerHTML = EMOJI_PICKS.map((e) => `<button type="button" data-emoji="${e}">${e}</button>`).join("");
+$("#emojiPicks").addEventListener("click", (e) => {
+  const pick = e.target.closest("[data-emoji]");
+  if (pick) sectionForm.emoji.value = pick.dataset.emoji;
+});
+
+function updateMoveButtons() {
+  const index = state.sections.findIndex((s) => s.id === editingSectionId);
+  $("#positionRow").hidden = index === -1 || state.sections.length < 2;
+  $("#moveUpBtn").disabled = index <= 0;
+  $("#moveDownBtn").disabled = index === state.sections.length - 1;
+}
+
+// Moves straight away (no need to press Save), so you can see it behind the dialog
+function moveSection(step) {
+  const list = state.sections;
+  const from = list.findIndex((s) => s.id === editingSectionId);
+  const to = from + step;
+  if (from === -1 || to < 0 || to >= list.length) return;
+  [list[from], list[to]] = [list[to], list[from]];
+  save();
+  render();
+  updateMoveButtons();
+}
+$("#moveUpBtn").addEventListener("click", () => moveSection(-1));
+$("#moveDownBtn").addEventListener("click", () => moveSection(1));
+
 function openSectionDialog(id = null) {
   editingSectionId = id;
   const section = id && getSection(id);
@@ -424,6 +528,7 @@ function openSectionDialog(id = null) {
   $("#sectionDialogTitle").textContent = section ? "Edit section" : "New section";
   $("#deleteSectionBtn").hidden = !section;
   drawSwatches();
+  updateMoveButtons();
   sectionDialog.showModal();
 }
 
@@ -453,6 +558,7 @@ $("#deleteSectionBtn").addEventListener("click", () => {
   sectionDialog.close();
   location.hash = "";
   render();
+  syncNotifications();
 });
 
 /* =========================================================
@@ -528,24 +634,82 @@ sessionForm.addEventListener("submit", () => {
 });
 
 $("#deleteSessionBtn").addEventListener("click", () => {
-  if (!confirm("Delete this session?")) return;
-  state.sessions = state.sessions.filter((s) => s.id !== editingSessionId);
+  const session = state.sessions.find((s) => s.id === editingSessionId);
+  if (!session) return;
+  state.sessions = state.sessions.filter((s) => s !== session);
   save();
   sessionDialog.close();
   render();
+  toast("Session deleted", () => {
+    state.sessions.push(session);
+    save();
+    render();
+  });
 });
 
 /* =========================================================
    Menu: backup export / import
    ========================================================= */
 
-$("#menuBtn").addEventListener("click", () => $("#menuDialog").showModal());
+$("#menuBtn").addEventListener("click", () => {
+  drawMenu();
+  $("#menuDialog").showModal();
+});
+
+function drawMenu() {
+  document.querySelectorAll("[data-theme-choice]").forEach((b) =>
+    b.classList.toggle("selected", b.dataset.themeChoice === settings.theme)
+  );
+  const supported = "Notification" in window && "serviceWorker" in navigator;
+  const on = settings.notify && supported && Notification.permission === "granted";
+  $("#notifyBtn").textContent = `🔔 Timer notifications: ${on ? "On" : "Off"}`;
+  $("#notifyBtn").disabled = !supported;
+  if (!supported) $("#notifyHint").textContent = "Notifications aren't available here. On iPhone, open the app from your home screen icon.";
+  else if (Notification.permission === "denied") $("#notifyHint").textContent = "Notifications are blocked. Allow them for this site in your phone's settings.";
+  else $("#notifyHint").textContent = "Shows a notification while a timer is running, with a Stop button (Android).";
+}
+
+/* ---------- Theme ---------- */
+
+function applyTheme() {
+  const root = document.documentElement;
+  if (settings.theme === "system") delete root.dataset.theme;
+  else root.dataset.theme = settings.theme;
+  // Colour of the phone's status bar
+  const bg = getComputedStyle(root).getPropertyValue("--bg").trim();
+  document.querySelector('meta[name="theme-color"]').content = bg;
+}
+
+$("#themePicker").addEventListener("click", (e) => {
+  const choice = e.target.closest("[data-theme-choice]")?.dataset.themeChoice;
+  if (!choice) return;
+  settings.theme = choice;
+  saveSettings();
+  applyTheme();
+  drawMenu();
+});
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
+
+/* ---------- Notifications toggle ---------- */
+
+$("#notifyBtn").addEventListener("click", async () => {
+  if (settings.notify) {
+    settings.notify = false;
+  } else {
+    const permission = await Notification.requestPermission();
+    settings.notify = permission === "granted";
+    if (!settings.notify) toast("Notifications weren't allowed");
+  }
+  saveSettings();
+  drawMenu();
+  syncNotifications();
+});
 
 $("#exportBtn").addEventListener("click", () => {
   const blob = new Blob([JSON.stringify({ app: "hourstracker", version: 1, exportedAt: Date.now(), ...state }, null, 2)], { type: "application/json" });
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
-  link.download = `hours-backup-${dayKey(Date.now())}.json`;
+  link.download = `stint-backup-${dayKey(Date.now())}.json`;
   link.click();
   URL.revokeObjectURL(link.href);
   toast("Backup downloaded");
@@ -566,30 +730,48 @@ $("#importFile").addEventListener("change", async (e) => {
     $("#menuDialog").close();
     location.hash = "";
     render();
+    syncNotifications();
     toast("Backup restored");
   } catch {
-    alert("That doesn't look like a Hours Tracker backup file.");
+    alert("That doesn't look like a Stint backup file.");
   }
 });
 
 /* =========================================================
-   Toast
+   Toast (with optional Undo button)
    ========================================================= */
 
 let toastTimer;
-function toast(message) {
+let toastUndo = null;
+
+function toast(message, undo = null) {
   const el = $("#toast");
-  el.textContent = message;
+  $("#toastMsg").textContent = message;
+  $("#toastUndo").hidden = !undo;
+  toastUndo = undo;
   el.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (el.hidden = true), 2200);
+  toastTimer = setTimeout(hideToast, undo ? 5000 : 2200);
 }
+
+function hideToast() {
+  $("#toast").hidden = true;
+  toastUndo = null;
+}
+
+$("#toastUndo").addEventListener("click", () => {
+  const undo = toastUndo;
+  hideToast();
+  undo?.();
+});
 
 /* =========================================================
    Start up
    ========================================================= */
 
+applyTheme();
 render();
+handleStopFromUrl();
 
 // Ask the browser not to clear our data when space is low
 navigator.storage?.persist?.();
@@ -599,6 +781,12 @@ if ("serviceWorker" in navigator) {
   if (location.hostname === "localhost") {
     navigator.serviceWorker.getRegistrations().then((regs) => regs.forEach((r) => r.unregister()));
   } else {
-    window.addEventListener("load", () => navigator.serviceWorker.register("sw.js"));
+    window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").then(syncNotifications));
+    // When a new version is published, reload once so you're on it (unless you're mid-edit)
+    if (navigator.serviceWorker.controller) {
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (!document.querySelector("dialog[open]")) location.reload();
+      });
+    }
   }
 }
