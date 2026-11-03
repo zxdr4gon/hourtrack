@@ -1,6 +1,6 @@
 // Offline support: saves the app's files on the device so it opens without internet.
 // IMPORTANT: change CACHE_VERSION every time any app file changes, so phones get the update.
-const CACHE_VERSION = "v2";
+const CACHE_VERSION = "v3";
 const CACHE_NAME = `hourstracker-${CACHE_VERSION}`;
 const FILES = [
   "./",
@@ -52,7 +52,9 @@ self.addEventListener("notificationclick", (event) => {
       if (stop) app.postMessage({ type: "stop", sectionId });
       return app.focus();
     }
-    // App isn't open: open it (it reads ?stop= and stops the timer itself)
-    return self.clients.openWindow(stop ? `./?stop=${encodeURIComponent(sectionId)}` : `./#/s/${sectionId}`);
+    // App isn't open: open it (it reads ?stop= and stops the timer itself).
+    // Reminder / countdown-done notifications have no Stop button and just open the app.
+    if (stop) return self.clients.openWindow(`./?stop=${encodeURIComponent(sectionId)}`);
+    return self.clients.openWindow(sectionId ? `./#/s/${sectionId}` : "./");
   })());
 });

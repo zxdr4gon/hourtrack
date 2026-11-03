@@ -5,6 +5,49 @@ what changed, which files were touched, and anything to watch out for.
 
 ---
 
+## v3.0.0 — 2026-11-02 (big feature update)
+**Cache version:** `v3`
+
+Added
+- **Categories:** optional category per section (e.g. "Sports"). Home groups sections under
+  category headings with combined today/week totals. Autocompletes existing categories.
+- **Goals:** optional goal per section, X minutes per day or per week. Progress bar on the
+  home card and the section page.
+- **Daily goal reminder:** pick a time (default 18:30). After that time, if a daily goal isn't
+  done, you get a notification and toast, once per day. ⚠️ It only fires while the app is open;
+  a web app can't wake itself up. A real background reminder needs Web Push (see Ideas in README).
+- **Pause / Resume:** ⏸ button on home cards, the section page and focus mode. Paused time isn't counted.
+- **Countdowns:** ⏳ Countdown on the section page (presets 5–90 min or custom). It auto-stops and
+  logs exactly the target time, even if the app was closed. Beeps, vibrates and notifies if it
+  just finished.
+- **Focus mode:** full-screen timer with a progress ring (countdown progress, or a once-a-minute
+  sweep). Keeps the screen awake (Wake Lock).
+- **Stopwatch:** standalone page with Lap / Pause / Reset; a paused stopwatch can be saved to a section.
+- **Stats page:** this week vs last week, a 7-day stacked chart, per-section and per-category tables,
+  and all-time insights (total, sessions, average, longest, most active day, favourite time of day).
+- **Section page chart:** hours per week for the last 8 weeks.
+- **Fix-it on Stop:** stopping a timer that ran over 3h opens the session editor ("Forgot to stop?").
+- **Custom colour:** rainbow swatch opens a full colour picker.
+- **Backup reminder:** home banner after 14 days without a backup (or if never backed up).
+  On phones, Export opens the share sheet so you can save to Drive / iCloud / email.
+
+Changed
+- Running timers are now stored as `{ start, pausedMs, pausedAt, target }` instead of a plain
+  start time. Old data converts automatically (`migrate()` in `app.js`).
+- Sessions have an optional `paused` (ms). Duration = end − start − paused. Editing a session's
+  times resets `paused` to 0.
+- The tick runs every 200ms (needed for the stopwatch's tenths).
+- Notifications are tagged with `data.kind` so reminders aren't removed by the running-timer sync.
+
+Notes / migrations
+- Sections gain optional `category` (string) and `goal` (`{ period: "day"|"week", minutes }`).
+- State gains `stopwatch` (`{ start, pausedMs, pausedAt, laps[] }` or null).
+- Settings gain `reminderOn`, `reminderTime`, `lastReminded`, `lastBackup`.
+
+**Files:** `index.html`, `style.css`, `app.js` (rewritten), `sw.js`, `README.md`, `CHANGELOG.md`
+
+---
+
 ## v2.0.1 — 2026-11-02 (docs only)
 **Cache version:** `v2` (unchanged; no app files changed)
 
