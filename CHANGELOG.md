@@ -5,6 +5,23 @@ what changed, which files were touched, and anything to watch out for.
 
 ---
 
+## v4.1.0 — 2026-11-02 (push reminders removed)
+**Cache version:** `v4.1`
+
+Removed
+- **Reminders when Stint is closed** (GitHub Actions push), at the owner's request: the workflow
+  `.github/workflows/reminder.yml`, `.github/scripts/remind.js`, the setup dialog, the service worker
+  push handler and the IndexedDB snapshot. The daily goal reminder still works while Stint is open.
+
+Notes / migrations
+- On start-up the app tidies up after v4: removes `settings.push`, deletes the `stint` IndexedDB
+  database and unsubscribes any push subscription.
+- If a `STINT_PUSH` secret was added on GitHub, it can be deleted (Settings → Secrets and variables → Actions).
+
+**Files:** `index.html`, `style.css`, `app.js`, `sw.js`, `.github/` (deleted), `README.md`, `CHANGELOG.md`
+
+---
+
 ## v4.0.0 — 2026-11-02 (reminders, review, search)
 **Cache version:** `v4`
 

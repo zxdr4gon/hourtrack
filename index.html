@@ -153,41 +153,13 @@
           <input type="time" id="reminderTime">
         </label>
       </div>
-      <p class="hint">If a daily goal isn't done by this time, you get a reminder. On its own this only works while Stint is open; set up the option below to get it when Stint is closed too.</p>
-      <button class="btn block" id="pushOpenBtn"></button>
+      <p class="hint">If a daily goal isn't done by this time, you get a reminder. This only works while Stint is open.</p>
 
       <button class="btn block" id="exportBtn">⬇ Export backup</button>
       <button class="btn block" id="importBtn">⬆ Import backup</button>
       <input type="file" id="importFile" accept="application/json,.json" hidden>
       <p class="hint">Your data is stored only on this device. Export a backup now and then so you never lose it.</p>
       <div class="dialog-actions">
-        <span class="spacer"></span>
-        <button type="button" class="btn" data-close>Close</button>
-      </div>
-    </div>
-  </dialog>
-
-  <!-- Background reminders (push from GitHub Actions) -->
-  <dialog id="pushDialog">
-    <div class="menu">
-      <h2>Reminders when Stint is closed</h2>
-      <p class="hint">Stint can't wake itself up, so a free scheduled job in your GitHub repo sends this phone a push at your reminder time. Stint then checks your goals and only nags you if one isn't done.</p>
-      <p class="warn" id="pushWarn" hidden></p>
-      <ol class="steps">
-        <li>Tap <b>Make setup code</b> below, then <b>Copy</b>.</li>
-        <li>Open <a id="pushSecretLink" target="_blank" rel="noopener">GitHub → New secret</a>. Name it <code>STINT_PUSH</code>, paste the code as the secret, and press <b>Add secret</b>.</li>
-        <li>Open <a id="pushActionsLink" target="_blank" rel="noopener">GitHub → Actions → Daily goal reminder</a> and press <b>Run workflow</b>. A test notification should arrive within a minute.</li>
-      </ol>
-      <button class="btn block primary" id="pushMakeBtn">Make setup code</button>
-      <div id="pushCodeRow" hidden>
-        <textarea id="pushCode" readonly rows="4" aria-label="Setup code"></textarea>
-        <button class="btn block" id="pushCopyBtn">📋 Copy code</button>
-        <p class="hint">Keep this code private: it lets anyone who has it send notifications to this phone. Only paste it into the GitHub secret.</p>
-      </div>
-      <p class="hint" id="pushStatus"></p>
-      <p class="hint">If you change the reminder time or which days your goals are on, make a new code and replace the secret. GitHub's timing can be up to about 30 minutes late.</p>
-      <div class="dialog-actions">
-        <button type="button" class="btn danger" id="pushOffBtn" hidden>Turn off</button>
         <span class="spacer"></span>
         <button type="button" class="btn" data-close>Close</button>
       </div>

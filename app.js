@@ -42,7 +42,6 @@ function load() {
 
 function save() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  mirrorForReminders();
 }
 
 // Per-device preferences, kept apart from the data (not included in backups)
@@ -55,7 +54,6 @@ function loadSettings() {
     lastReminded: null,
     lastBackup: null,
     lastReviewSeen: null,
-    push: null, // background reminders on this device: { publicKey, privateKey, time, days }
   };
   try {
     return { ...defaults, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") };
@@ -66,7 +64,6 @@ function loadSettings() {
 
 function saveSettings() {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-  mirrorForReminders();
 }
 
 function uid() {
@@ -213,9 +210,9 @@ function sessionsWithLive(sectionId, now = Date.now()) {
 
 // Time inside [from, to). Sessions that cross the boundary only count the part inside
 // (paused time is spread evenly over the session).
-function totalBetween(sectionId, from, to, now = Date.now(), includeRunning = true) {
+function totalBetween(sectionId, from, to, now = Date.now()) {
   let total = 0;
-  for (const s of includeRunning ? sessionsWithLive(sectionId, now) : sessionsFor(sectionId)) {
+  for (const s of sessionsWithLive(sectionId, now)) {
     const span = s.end - s.start;
     const overlap = Math.min(s.end, to) - Math.max(s.start, from);
     if (overlap > 0 && span > 0) total += overlap * (sessionMs(s) / span);
@@ -562,136 +559,6 @@ function checkReminder() {
   const list = behind.map(({ section, progress }) => `${section.name} (${fmtDuration(progress.target - progress.done)} left)`).join(", ");
   notify("🎯 Daily goals not done yet", list, "reminder");
   toast(`🎯 Still to do today: ${list}`);
-}
-
-/* ---------- Background reminders (Web Push) ----------
-   A free scheduled job in the GitHub repo (.github/workflows/reminder.yml) sends a push every
-   evening at the reminder time. The service worker then checks the goals and shows the reminder.
-   The service worker can't read localStorage, so we keep a small copy of what it needs in IndexedDB. */
-
-const REPO_URL = "https://github.com/zxdr4gon/hourstracker";
-const pushSupported = notificationsSupported && "PushManager" in window;
-
-function kvOpen() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open("stint", 1);
-    req.onupgradeneeded = () => req.result.createObjectStore("kv");
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function kvGet(key) {
-  const db = await kvOpen();
-  return new Promise((resolve, reject) => {
-    const req = db.transaction("kv").objectStore("kv").get(key);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function kvSet(key, value) {
-  const db = await kvOpen();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction("kv", "readwrite");
-    tx.objectStore("kv").put(value, key);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-// What the service worker needs to work out "which daily goals aren't done yet"
-let mirrorTimer;
-function mirrorForReminders() {
-  clearTimeout(mirrorTimer);
-  mirrorTimer = setTimeout(() => {
-    const now = Date.now();
-    const sections = state.sections
-      .filter((s) => s.goal?.period === "day")
-      .map((s) => ({ id: s.id, name: s.name, emoji: s.emoji, minutes: s.goal.minutes, days: goalDays(s.goal) }));
-    const done = {};
-    for (const s of sections) done[s.id] = totalBetween(s.id, startOfDay(now), Infinity, now, false);
-    kvSet("snapshot", {
-      today: dayKey(now),
-      reminderOn: settings.reminderOn,
-      lastReminded: settings.lastReminded,
-      sections,
-      done, // today's saved sessions; running timers are added by the service worker
-      running: state.running,
-    }).catch(() => {});
-  }, 300);
-}
-
-// If the push reminder already went off today, don't remind again inside the app
-async function syncPushReminded() {
-  try {
-    const day = await kvGet("pushReminded");
-    if (day === dayKey(Date.now()) && settings.lastReminded !== day) {
-      settings.lastReminded = day;
-      saveSettings();
-    }
-  } catch {}
-}
-
-function b64url(buffer) {
-  return btoa(String.fromCharCode(...new Uint8Array(buffer))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function b64urlBytes(str) {
-  return Uint8Array.from(atob(str.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
-}
-
-// Each device makes its own key pair (VAPID). The private half goes into the GitHub secret.
-async function makeVapidKeys() {
-  const pair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
-  return {
-    publicKey: b64url(await crypto.subtle.exportKey("raw", pair.publicKey)),
-    privateKey: (await crypto.subtle.exportKey("jwk", pair.privateKey)).d,
-  };
-}
-
-// Weekdays (0 = Sunday) that have at least one daily goal; the job only sends on these
-function reminderDays() {
-  return ALL_DAYS.filter((d) => state.sections.some((s) => s.goal?.period === "day" && goalDays(s.goal).includes(d)));
-}
-
-function pushCodeOutdated() {
-  const p = settings.push;
-  return !!p && (p.time !== settings.reminderTime || p.days.join() !== reminderDays().join());
-}
-
-// Subscribes this device and returns the text to paste into the STINT_PUSH secret
-async function makePushCode() {
-  if (location.hostname === "localhost") throw new Error("This only works on the live site.");
-  if (!(await ensureNotificationPermission())) throw new Error("Notifications weren't allowed.");
-  const reg = await navigator.serviceWorker.ready;
-  const keys = settings.push || (await makeVapidKeys());
-  let sub = await reg.pushManager.getSubscription();
-  const subKey = sub?.options?.applicationServerKey;
-  if (sub && (!subKey || b64url(subKey) !== keys.publicKey)) {
-    await sub.unsubscribe();
-    sub = null;
-  }
-  sub ??= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64urlBytes(keys.publicKey) });
-  settings.push = { publicKey: keys.publicKey, privateKey: keys.privateKey, time: settings.reminderTime, days: reminderDays() };
-  saveSettings();
-  return JSON.stringify({
-    subscription: sub.toJSON(),
-    publicKey: keys.publicKey,
-    privateKey: keys.privateKey,
-    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    time: settings.push.time,
-    days: settings.push.days,
-  });
-}
-
-async function turnOffPush() {
-  try {
-    const reg = await navigator.serviceWorker.getRegistration();
-    await (await reg?.pushManager.getSubscription())?.unsubscribe();
-  } catch {}
-  settings.push = null;
-  saveSettings();
 }
 
 /* =========================================================
@@ -1532,7 +1399,6 @@ setInterval(() => {
 // When you come back to the app, refresh everything (also picks up a new day)
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
-    syncPushReminded();
     render();
     syncNotifications();
   }
@@ -1892,7 +1758,6 @@ function drawMenu() {
   $("#reminderBtn").textContent = `🎯 Daily goal reminder: ${settings.reminderOn ? "On" : "Off"}`;
   $("#reminderTime").value = settings.reminderTime;
   $("#reminderTimeRow").hidden = !settings.reminderOn;
-  $("#pushOpenBtn").textContent = `📲 Reminders when Stint is closed: ${settings.push ? (pushCodeOutdated() ? "update needed" : "On") : "Set up"}`;
   $("#notifyBtn").disabled = !notificationsSupported;
 
   let hint = "Shows a notification while a timer is running, with a Stop button (Android).";
@@ -1952,71 +1817,6 @@ $("#reminderTime").addEventListener("change", (e) => {
   settings.reminderTime = e.target.value || "18:30";
   settings.lastReminded = null;
   saveSettings();
-  drawMenu();
-});
-
-/* ---------- Background reminders dialog ---------- */
-
-const pushDialog = $("#pushDialog");
-
-$("#pushOpenBtn").addEventListener("click", () => {
-  $("#pushCode").value = "";
-  $("#pushCodeRow").hidden = true;
-  drawPushDialog();
-  pushDialog.showModal();
-});
-
-function drawPushDialog() {
-  const p = settings.push;
-  $("#pushSecretLink").href = `${REPO_URL}/settings/secrets/actions/new`;
-  $("#pushActionsLink").href = `${REPO_URL}/actions/workflows/reminder.yml`;
-  $("#pushMakeBtn").disabled = !pushSupported;
-  $("#pushMakeBtn").textContent = p ? "Make a new setup code" : "Make setup code";
-  $("#pushOffBtn").hidden = !p;
-
-  let status = "Not set up on this device yet.";
-  if (!pushSupported) status = "Push isn't available here. On iPhone, add Stint to your home screen and open it from there (needs iOS 16.4 or newer).";
-  else if (p) status = `✓ Set up on this device: ${p.time}, ${p.days.length ? describeDays(p.days) : "no days"}.`;
-  $("#pushStatus").textContent = status;
-
-  let warn = "";
-  if (!settings.reminderOn) warn = "Turn on 🎯 Daily goal reminder in the menu first.";
-  else if (!reminderDays().length) warn = "Give at least one section a daily goal first (Edit section → Goal).";
-  else if (pushCodeOutdated()) warn = "You changed the reminder time or your goal days. Make a new code and replace the STINT_PUSH secret on GitHub.";
-  $("#pushWarn").textContent = warn;
-  $("#pushWarn").hidden = !warn;
-}
-
-$("#pushMakeBtn").addEventListener("click", async () => {
-  const btn = $("#pushMakeBtn");
-  btn.disabled = true;
-  try {
-    $("#pushCode").value = await makePushCode();
-    $("#pushCodeRow").hidden = false;
-  } catch (err) {
-    toast(err.message || "Couldn't set up push");
-  }
-  drawPushDialog();
-  drawMenu();
-});
-
-$("#pushCopyBtn").addEventListener("click", async () => {
-  const box = $("#pushCode");
-  try {
-    await navigator.clipboard.writeText(box.value);
-  } catch {
-    box.select();
-    document.execCommand("copy");
-  }
-  toast("Copied. Now paste it into the GitHub secret.");
-});
-
-$("#pushOffBtn").addEventListener("click", async () => {
-  await turnOffPush();
-  $("#pushCodeRow").hidden = true;
-  drawPushDialog();
-  drawMenu();
-  toast("Turned off. Also delete the STINT_PUSH secret on GitHub.");
 });
 
 /* ---------- Backup ---------- */
@@ -2106,8 +1906,10 @@ applyTheme();
 checkCountdowns();
 render();
 handleStopFromUrl();
-mirrorForReminders();
-syncPushReminded();
+// v4 had GitHub push reminders (removed in v4.1): tidy up what it left on the phone
+delete settings.push;
+window.indexedDB?.deleteDatabase("stint");
+navigator.serviceWorker?.getRegistration().then((reg) => reg?.pushManager?.getSubscription()).then((sub) => sub?.unsubscribe()).catch(() => {});
 
 // Ask the browser not to clear our data when space is low
 navigator.storage?.persist?.();
